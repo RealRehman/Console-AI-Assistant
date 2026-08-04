@@ -4,37 +4,33 @@ from config import (
     GROQ_API_KEY,
     MODEL,
     TEMPERATURE,
-    MAX_COMPLETION_TOKENS,
+    MAX_COMPLETION_TOKENS
 )
+
+from system_prompt import SYSTEM_PROMPT
+
 
 client = Groq(api_key=GROQ_API_KEY)
 
 
-def get_ai_response(messages):
+def get_ai_response(user_message):
 
-    stream = client.chat.completions.create(
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT
+        },
+        {
+            "role": "user",
+            "content": user_message
+        }
+    ]
+
+    response = client.chat.completions.create(
         model=MODEL,
         messages=messages,
         temperature=TEMPERATURE,
-        max_completion_tokens=MAX_COMPLETION_TOKENS,
-        stream=True
+        max_completion_tokens=MAX_COMPLETION_TOKENS
     )
 
-    complete_response = ""
-
-    print("\nAI: ", end="", flush=True)
-    #in the aobe line of code the the flush function is used to force the output to be written to the console immediately, rather than being buffered. 
-    
-    for chunk in stream:
-
-        content = chunk.choices[0].delta.content
-
-        if content:
-
-            print(content, end="", flush=True)
-
-            complete_response += content
-
-    print()
-
-    return complete_response
+    return response.choices[0].message.content

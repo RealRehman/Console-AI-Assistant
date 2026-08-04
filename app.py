@@ -1,21 +1,13 @@
 from flask import Flask
 
+from routes.page_routes import page_bp
+from routes.chat_routes import chat_bp
+
+
 app = Flask(__name__)
 
-
-@app.route("/")
-def home():
-    return "Home Page"
-
-
-@app.route("/about")
-def about():
-    return "About AI Assistant"
-
-
-@app.route("/contact")
-def contact():
-    return "Contact Page"
+app.register_blueprint(page_bp)
+app.register_blueprint(chat_bp)
 
 
 if __name__ == "__main__":
