@@ -2,16 +2,57 @@ from chat import get_ai_response
 from config import SYSTEM_PROMPT
 from logger import logger
 from utils import print_banner, get_user_input
-from conversation_manager import save_conversation
-
+from conversation_manager import (
+    save_conversation,
+    list_conversations,
+    load_conversation
+)
 
 # Store conversation history
-messages = [
-    {
-        "role": "system",
-        "content": SYSTEM_PROMPT
-    }
-]
+choice = input(
+    "1. New Conversation\n"
+    "2. Continue Previous Conversation\n\n"
+    "Choose: "
+)
+
+if choice == "2":
+
+    conversations = list_conversations()
+
+    if not conversations:
+
+        print("\nNo saved conversations found.\n")
+
+        messages = [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT
+            }
+        ]
+
+    else:
+
+        print("\nSaved Conversations:\n")
+
+        for index, file in enumerate(conversations, start=1):
+            print(f"{index}. {file}")
+
+        selection = int(input("\nSelect conversation: "))
+
+        messages = load_conversation(
+            conversations[selection - 1]
+        )
+
+        print("\nConversation Loaded Successfully!\n")
+
+else:
+
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT
+        }
+    ]
 
 
 def main():
