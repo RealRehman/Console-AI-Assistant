@@ -2,6 +2,8 @@ from chat import get_ai_response
 from config import SYSTEM_PROMPT
 from logger import logger
 from utils import print_banner, get_user_input
+from conversation_manager import save_conversation
+
 
 # Store conversation history
 messages = [
@@ -21,8 +23,15 @@ def main():
         user_input = get_user_input()
 
         if user_input.lower() == "exit":
+
+            filename = save_conversation(messages)
+
+            print(f"\nConversation saved to:\n{filename}")
+
+            logger.info(f"Conversation saved: {filename}")
+
             print("\nGoodbye! 👋")
-            logger.info("Application Closed")
+
             break
 
         logger.info(f"USER: {user_input}")
