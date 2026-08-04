@@ -1,63 +1,60 @@
-from groq import Groq
-from dotenv import load_dotenv
-import os
+from chat import get_ai_response
+from config import SYSTEM_PROMPT
+from logger import logger
+from utils import print_banner, get_user_input
 
-# Load environment variables
-load_dotenv()
-
-# Create Groq client
-client = Groq(
-    api_key=os.getenv("GROQ_API_KEY")
-)
-
-# Conversation history
+# Store conversation history
 messages = [
     {
         "role": "system",
-        "content": "You are a helpful AI assistant."
+        "content": SYSTEM_PROMPT
     }
 ]
 
-print("=" * 50)
-print("      Welcome to AI Chatbot")
-print("Type 'exit' to quit.")
-print("=" * 50)
 
-while True:
+def main():
 
-    user_input = input("\nYou: ").strip()
+    print_banner()
 
-    if user_input.lower() == "exit":
-        print("\nGoodbye! ")
-        break
+    while True:
 
-    # Save user message
-    messages.append({
-        "role": "user",
-        "content": user_input
-    })
+        user_input = get_user_input()
 
-    try:
+        if user_input.lower() == "exit":
+            print("\nGoodbye! 👋")
+            logger.info("Application Closed")
+            break
 
-        # Send entire conversation to Groq
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages,
-            temperature=0.7,
-            max_completion_tokens=500
+        logger.info(f"USER: {user_input}")
+
+        messages.append(
+            {
+                "role": "user",
+                "content": user_input
+            }
         )
 
-        # Extract AI response
-        ai_reply = response.choices[0].message.content
+        try:
 
-        # Print AI response
-        print(f"\nAI: {ai_reply}")
+            ai_reply = get_ai_response(messages)
 
-        # Save AI response
-        messages.append({
-            "role": "assistant",
-            "content": ai_reply
-        })
+            print(f"\nAI: {ai_reply}\n")
 
-    except Exception as e:
-        print(f"\nError: {e}")
+            logger.info(f"AI: {ai_reply}")
+
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": ai_reply
+                }
+            )
+
+        except Exception as e:
+
+            logger.error(str(e))
+
+            print(f"\nError: {e}\n")
+
+
+if __name__ == "__main__":
+    main()
