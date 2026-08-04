@@ -88,8 +88,6 @@ def main():
 
             ai_reply = get_ai_response(messages)
 
-            print(f"\nAI: {ai_reply}\n")
-
             logger.info(f"AI: {ai_reply}")
 
             messages.append(
