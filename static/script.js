@@ -7,6 +7,7 @@ const header = document.getElementById('header');
 const input = document.getElementById('messageInput');
 const sendBtn = document.getElementById('sendBtn');
 const typingRow = document.getElementById('typingRow');
+let conversationId = null;
 
 // ---------- Auto-resize the textarea as you type ----------
 function autoResize() {
@@ -86,11 +87,13 @@ async function sendMessage() {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        message: text
+        message: text, 
+        conversation_id: conversationId
       })
     });
 
     const data = await response.json();
+    conversationId = data.conversation_id;
 
     hideTyping();
 

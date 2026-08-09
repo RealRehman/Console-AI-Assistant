@@ -7,17 +7,38 @@ CONVERSATION_FOLDER = "conversations"
 os.makedirs(CONVERSATION_FOLDER, exist_ok=True)
 
 
-def save_conversation(messages):
+def create_conversation():
     """
-    Save conversation to a timestamped JSON file.
+    Creates a new conversation ID.
     """
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    filename = f"{CONVERSATION_FOLDER}/chat_{timestamp}.json"
+    conversation_id = f"chat_{timestamp}"
 
-    with open(filename, "w", encoding="utf-8") as file:
-        json.dump(messages, file, indent=4, ensure_ascii=False)
+    return conversation_id
+
+
+def save_conversation(conversation_id, messages):
+    """
+    Save or update a conversation.
+    """
+
+    filename = f"{conversation_id}.json"
+
+    filepath = os.path.join(
+        CONVERSATION_FOLDER,
+        filename
+    )
+
+    with open(filepath, "w", encoding="utf-8") as file:
+
+        json.dump(
+            messages,
+            file,
+            indent=4,
+            ensure_ascii=False
+        )
 
     return filename
 
@@ -30,7 +51,8 @@ def list_conversations():
     files = os.listdir(CONVERSATION_FOLDER)
 
     json_files = [
-        file for file in files
+        file
+        for file in files
         if file.endswith(".json")
     ]
 
@@ -39,12 +61,20 @@ def list_conversations():
     return json_files
 
 
-def load_conversation(filename):
+def load_conversation(conversation_id):
     """
-    Loads a conversation from a JSON file.
+    Loads a conversation using its ID.
     """
 
-    filepath = os.path.join(CONVERSATION_FOLDER, filename)
+    filename = f"{conversation_id}.json"
+
+    filepath = os.path.join(
+        CONVERSATION_FOLDER,
+        filename
+    )
+
+    if not os.path.exists(filepath):
+        return []
 
     with open(filepath, "r", encoding="utf-8") as file:
 

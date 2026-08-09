@@ -13,22 +13,20 @@ from system_prompt import SYSTEM_PROMPT
 client = Groq(api_key=GROQ_API_KEY)
 
 
-def get_ai_response(user_message):
+def get_ai_response(messages):
 
-    messages = [
+    chat_messages = [
         {
             "role": "system",
             "content": SYSTEM_PROMPT
-        },
-        {
-            "role": "user",
-            "content": user_message
         }
     ]
 
+    chat_messages.extend(messages)
+
     response = client.chat.completions.create(
         model=MODEL,
-        messages=messages,
+        messages=chat_messages,
         temperature=TEMPERATURE,
         max_completion_tokens=MAX_COMPLETION_TOKENS
     )
