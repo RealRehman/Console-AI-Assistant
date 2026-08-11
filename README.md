@@ -1059,7 +1059,7 @@ The goal is not only to build the application, but also to understand **why each
 * [x] Configurable model settings
 * [x] Basic logging structure
 
-### Next
+<!-- ### Next
 
 * [ ] Better error handling
 * [ ] Better logging integration
@@ -1069,7 +1069,7 @@ The goal is not only to build the application, but also to understand **why each
 * [ ] Improved project documentation
 * [ ] Database storage
 * [ ] Knowledge/document features
-* [ ] Personal Knowledge Assistant features
+* [ ] Personal Knowledge Assistant features -->
 
 ---
 
