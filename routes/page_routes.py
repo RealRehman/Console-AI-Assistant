@@ -9,3 +9,8 @@ page_bp = Blueprint("page", __name__)
 def home():
 
     return render_template("index.html")
+
+@page_bp.route("/about")
+def about():
+
+    return render_template("index.html")
