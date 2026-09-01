@@ -28,6 +28,12 @@ The current version supports:
 * Console-based AI assistant
 * Basic error handling for invalid chat requests
 * Application logging structure
+* **Retrieval-Augmented Generation (RAG):** upload a PDF or DOCX and ask
+  questions answered only from that document
+* Document chunking with configurable chunk size/overlap
+* Local vector database (Chroma) for semantic chunk retrieval
+* Live token-usage bar showing prompt size vs. the model's context window
+* Drag-and-drop / click-to-upload document panel with remove button
 
 ---
 
@@ -41,9 +47,16 @@ ai_assistant/
 ├── config.py
 ├── console_app.py
 ├── conversation_manager.py
+├── document_store.py
 ├── logger.py
 ├── system_prompt.py
 ├── utils.py
+│
+├── rag/
+│   ├── __init__.py
+│   ├── chunking.py
+│   ├── vector_store.py
+│   └── token_utils.py
 │
 ├── routes/
 │   ├── __init__.py
@@ -785,36 +798,167 @@ HTML page.
 
 ---
 
+## `POST /upload`
+
+Uploads a `.pdf` or `.docx` file, extracts its text, splits it into
+chunks, and indexes those chunks in the vector store so `/chat` can
+retrieve them.
+
+### Request
+
+`multipart/form-data` with a `file` field.
+
+### Response
+
+```json
+{
+    "message": "Document uploaded and indexed successfully",
+    "document": {
+        "loaded": true,
+        "filename": "notes.pdf",
+        "chunk_count": 33,
+        "total_tokens": 9228,
+        "char_count": 28322,
+        "chunk_size": 180,
+        "chunk_overlap": 40,
+        "top_k": 4
+    }
+}
+```
+
+---
+
+## `GET /document/status`
+
+Returns the same `document` object shown above for whatever is
+currently loaded (or `"loaded": false` if nothing has been uploaded
+yet). Used by the frontend to restore the document panel on page load.
+
+---
+
+## `DELETE /document`
+
+Clears the currently loaded document and its vector index.
+
+---
+
+## `GET /limits`
+
+Returns the model's context window, used by the frontend to draw the
+token-usage bar before any message has been sent.
+
+```json
+{ "context_window": 131072 }
+```
+
+---
+
 ## `POST /chat`
 
-Sends a message to the AI.
+Sends a message to the AI. If a document is loaded, the most
+relevant chunks are retrieved and the assistant answers only from
+them; otherwise it falls back to the general-purpose system prompt.
 
 ### Request
 
 ```json
-{
-    "message": "Hello",
-    "conversation_id": null
-}
-```
-
-For an existing conversation:
-
-```json
-{
-    "message": "What did I say earlier?",
-    "conversation_id": "chat_2026-08-09_15-30-20"
-}
+{ "message": "Hello" }
 ```
 
 ### Response
 
 ```json
 {
-    "conversation_id": "chat_2026-08-09_15-30-20",
-    "response": "Hello! How can I help you?"
+    "response": "Hello! How can I help you?",
+    "used_rag": false,
+    "sources": [],
+    "token_usage": {
+        "prompt_tokens": 42,
+        "context_window": 131072,
+        "percent_used": 0.03
+    }
 }
 ```
+
+When a document is loaded and the question is answered from it,
+`used_rag` is `true` and `sources` lists the chunk index and
+similarity score of each retrieved chunk, e.g.
+`{"chunk_index": 12, "score": 0.83}`.
+
+> **Note:** the request/response shapes above describe what the code
+> actually does today. Conversation IDs and multi-turn memory are
+> described elsewhere in this document as a design goal, but are not
+> yet wired into `/chat` — see **Current Limitations** below.
+
+---
+
+# Retrieval-Augmented Generation (RAG)
+
+This is how a document goes from an uploaded file to an answer:
+
+```text
+Upload (.pdf / .docx)
+        ↓
+Extract raw text  (pypdf / python-docx)
+        ↓
+Chunk the text     (rag/chunking.py)
+        ↓
+Embed each chunk   (TF-IDF, scikit-learn)
+        ↓
+Store in vector DB (Chroma, rag/vector_store.py)
+        ↓
+User asks a question
+        ↓
+Embed the question with the same TF-IDF vectorizer
+        ↓
+Retrieve the top-K most similar chunks
+        ↓
+Insert those chunks into the system prompt
+        ↓
+Ask the LLM to answer using ONLY those chunks
+```
+
+### Why TF-IDF instead of a neural embedding model?
+
+Neural embedding models (e.g. `sentence-transformers`) need to
+download model weights from the internet the first time they run,
+which makes the app fragile on machines with restricted networks.
+TF-IDF vectors are computed 100% locally with `scikit-learn`, need no
+downloads, and work well for finding the chunks that share vocabulary
+with a question — which is exactly what a single-document assistant
+like this needs.
+
+Chroma still does the real "vector database" work: storing the
+vectors and running the similarity search. It's just handed
+pre-computed TF-IDF vectors instead of generating its own embeddings.
+
+### Only one document at a time
+
+Uploading a new file replaces whatever was indexed before, same as
+the original version of this project. The vector index lives in
+memory for the lifetime of the Flask process — it is not persisted
+to disk, so it resets when the server restarts.
+
+### Configuration
+
+All of this is tunable in `config.py`:
+
+```text
+RAG_CHUNK_SIZE      # target words per chunk (default: 180)
+RAG_CHUNK_OVERLAP   # words repeated between chunks (default: 40)
+RAG_TOP_K           # chunks retrieved per question (default: 4)
+MODEL_CONTEXT_WINDOW  # used for the token-usage bar (131,072 for
+                       # openai/gpt-oss-120b on Groq)
+```
+
+### Token usage in the UI
+
+Since the exact tokenizer used by the hosted model isn't available
+offline, `rag/token_utils.py` estimates tokens using the common
+~4-characters-per-token rule of thumb. It's an approximation, not an
+exact count, but it's accurate enough to give a real sense of how
+much of the model's context window a request is using — the bar in
+the document panel updates after every reply.
 
 ---
 
@@ -958,19 +1102,39 @@ The application needs better handling for:
 
 ---
 
-### 2. Conversation Management UI
+### 2. Conversation Memory Is Not Wired Into `/chat` Yet
 
-Conversations are currently stored as JSON files, but there is not yet a proper interface for:
-
-* Creating named conversations
-* Listing conversations
-* Switching between conversations
-* Deleting conversations
-* Renaming conversations
+`conversation_manager.py` can create, save, and load conversation
+JSON files, and the console app / earlier design docs describe using
+it for multi-turn memory — but the current `/chat` route does not
+call it. Each request is answered independently, with no memory of
+earlier turns in the same session. Wiring `conversation_manager`
+into `chat.py` (loading prior turns, saving new ones, returning a
+`conversation_id`) is the natural next step.
 
 ---
 
-### 3. Database
+### 3. RAG Index Is In-Memory Only
+
+The vector index built from an uploaded document lives in memory for
+as long as the Flask process runs. Restarting the server clears it,
+and the document has to be re-uploaded. There's also only ever one
+active document — uploading a new file replaces the previous one
+rather than adding to a growing library.
+
+---
+
+### 4. Token Counts Are Approximate
+
+`rag/token_utils.py` estimates tokens with a ~4-characters-per-token
+rule of thumb rather than the model's exact tokenizer, since the
+exact tokenizer isn't available without a network download. The
+token-usage bar is accurate enough to reason about the context
+budget, but not exact.
+
+---
+
+### 5. Database
 
 The application currently uses JSON files for conversation storage.
 
@@ -978,7 +1142,7 @@ Later, we can move to a database such as SQLite.
 
 ---
 
-### 4. Authentication
+### 6. Authentication
 
 There is currently no user authentication.
 
@@ -986,7 +1150,7 @@ The application is currently designed as a local personal assistant.
 
 ---
 
-### 5. Testing
+### 7. Testing
 
 Automated tests still need to be added.
 
@@ -1051,20 +1215,24 @@ The goal is not only to build the application, but also to understand **why each
 * [x] Web interface
 * [x] Flask routes
 * [x] Separate route modules
-* [x] Conversation manager
-* [x] Conversation IDs
+* [x] Conversation manager (saving/loading conversation files; not yet wired into `/chat` — see Current Limitations)
 * [x] JSON conversation storage
-* [x] Conversation memory
 * [x] System prompt
 * [x] Configurable model settings
 * [x] Basic logging structure
+* [x] Document upload (PDF + DOCX)
+* [x] Document chunking
+* [x] Local vector database (Chroma + TF-IDF embeddings)
+* [x] Retrieval-Augmented Generation in `/chat`
+* [x] Token-usage bar in the UI
+* [x] Drag-and-drop document panel with remove button
 
 <!-- ### Next
 
+* [ ] Wire conversation memory into /chat
 * [ ] Better error handling
 * [ ] Better logging integration
 * [ ] Better input validation
-* [ ] Conversation management endpoints
 * [ ] Automated testing
 * [ ] Improved project documentation
 * [ ] Database storage

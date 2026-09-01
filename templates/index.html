@@ -24,7 +24,7 @@
 
     <div class="title">
       <h1>AI Assistant</h1>
-      <span>Powered by LLM</span>
+      <span id="headerSubtitle">Powered by LLM</span>
     </div>
 
     <div class="status">
@@ -33,22 +33,62 @@
     </div>
   </header>
 
+  <!-- Document / RAG panel -->
+  <section class="doc-panel" id="docPanel">
+
+    <!-- Empty state: drop zone -->
+    <div class="doc-dropzone" id="docDropzone">
+      <input type="file" id="documentInput" accept=".docx,.pdf" hidden />
+
+      <svg class="doc-dropzone-icon" viewBox="0 0 24 24" fill="none">
+        <path d="M12 4v11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        <path d="M7.5 9.5L12 5l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M4.5 16.5v2A1.5 1.5 0 0 0 6 20h12a1.5 1.5 0 0 0 1.5-1.5v-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+
+      <div class="doc-dropzone-text">
+        <strong>Add a document</strong>
+        <span>Drop a PDF or DOCX here, or click to browse — ask questions about its contents</span>
+      </div>
+
+      <button id="uploadBtn" type="button" class="doc-btn doc-btn-primary">
+        Upload Document
+      </button>
+    </div>
+
+    <!-- Loaded state: document card -->
+    <div class="doc-card" id="docCard" hidden>
+      <div class="doc-card-icon">📄</div>
+
+      <div class="doc-card-info">
+        <strong id="docName">document.pdf</strong>
+        <span id="docMeta">0 chunks · 0 tokens</span>
+      </div>
+
+      <button id="removeDocBtn" class="doc-btn doc-btn-ghost" type="button" title="Remove document">
+        Remove
+      </button>
+    </div>
+
+    <!-- Token limit bar -->
+    <div class="token-bar-wrap" title="Approximate tokens used in the last request, out of the model's context window">
+      <div class="token-bar-labels">
+        <span id="tokenLabel">0 / 0 tokens</span>
+        <span id="tokenPercent">0%</span>
+      </div>
+      <div class="token-bar-track">
+        <div class="token-bar-fill" id="tokenBarFill"></div>
+      </div>
+    </div>
+
+  </section>
+
   <!-- Chat -->
   <main class="chat" id="chat">
 
     <div class="row ai">
       <div class="avatar">🤖</div>
-      <div class="bubble">Hi! How can I help?</div>
-    </div>
-
-    <div class="row user">
-      <div class="avatar">👤</div>
-      <div class="bubble">Hello!</div>
-    </div>
-
-    <div class="row ai">
-      <div class="avatar">🤖</div>
-      <div class="bubble">Hi! How can I help?</div>
+      <div class="bubble">Hi! Upload a document above and ask me anything about it, or just chat with me directly.</div>
     </div>
 
   </main>
@@ -59,19 +99,6 @@
     <div class="bubble typing-bubble">
       <span></span><span></span><span></span>
     </div>
-  </div>
-
-  <!-- Document Upload -->
-  <div class="document-upload">
-    <input
-      type="file"
-      id="documentInput"
-      accept=".docx,.pdf"
-    />
-
-    <button id="uploadBtn" type="button">
-      Upload Document
-    </button>
   </div>
 
   <!-- Input -->
