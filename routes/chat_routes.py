@@ -83,7 +83,7 @@ def chat():
             "response": result["response"],
             "used_rag": result["used_rag"],
             "sources": result["sources"],
-            "token_usage": result["token_usage"],
+            "token_usage": result["token_usage"],  # now includes cumulative_total_tokens
         })
 
     except Exception as e:

@@ -273,7 +273,7 @@ async function sendMessage() {
     }
 
     if (data.token_usage) {
-      updateTokenBar(data.token_usage.prompt_tokens, data.token_usage.context_window);
+     updateTokenBar(data.token_usage.cumulative_total_tokens, data.token_usage.context_window);  // ✅
     }
 
     scrollToBottom();

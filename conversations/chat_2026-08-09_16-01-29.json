@@ -1,0 +1,10 @@
+[
+    {
+        "role": "user",
+        "content": "Hi"
+    },
+    {
+        "role": "assistant",
+        "content": "Hello. It's nice to meet you. I'm a Python Programming and Software Development Mentor. I can help with a wide range of topics including Python, Object-Oriented Programming, Data Structures and Algorithms, APIs, web frameworks like Flask and FastAPI, databases, Git, GitHub, Docker, Linux, and software engineering best practices. What brings you here today? Do you have a specific question or topic you'd like to learn more about?"
+    }
+]

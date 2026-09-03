@@ -1,0 +1,22 @@
+[
+    {
+        "role": "system",
+        "content": "You are a helpful AI assistant. Answer clearly and concisely."
+    },
+    {
+        "role": "user",
+        "content": "I like to eat cakes"
+    },
+    {
+        "role": "assistant",
+        "content": "Cakes can be delicious. What's your favorite type of cake?"
+    },
+    {
+        "role": "user",
+        "content": "Black Forest"
+    },
+    {
+        "role": "assistant",
+        "content": "Black Forest cake is a classic. The combination of chocolate, cherries, and whipped cream is a great flavor combination. Do you have a favorite place to get Black Forest cake or a favorite recipe to make it at home?"
+    }
+]

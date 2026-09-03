@@ -10,7 +10,7 @@ from config import (
     MODEL_CONTEXT_WINDOW,
 )
 
-from rag.token_utils import count_message_tokens
+from rag.token_utils import add_to_cumulative_total
 from system_prompt import SYSTEM_PROMPT
 
 client = Groq(api_key=GROQ_API_KEY)
@@ -50,8 +50,8 @@ def get_ai_response(user_message):
     system prompt.
 
     Returns a dict with the reply text plus enough metadata for the
-    UI to show which document chunks were used and how much of the
-    model's context window this request consumed.
+    UI to show which document chunks were used and the running total
+    of tokens used across the whole session.
     """
 
     status = get_document_status()
@@ -78,8 +78,17 @@ def get_ai_response(user_message):
 
     reply = response.choices[0].message.content
 
-    prompt_tokens = count_message_tokens(messages)
-    percent_used = round((prompt_tokens / MODEL_CONTEXT_WINDOW) * 100, 2)
+    # Exact counts from the API for this turn
+    turn_prompt_tokens = response.usage.prompt_tokens
+    turn_completion_tokens = response.usage.completion_tokens
+    turn_total_tokens = response.usage.total_tokens
+
+    # Add this turn's usage to the running session total.
+    # This total is only ever added to, never recomputed from scratch,
+    # so it can never decrease.
+    cumulative_total = add_to_cumulative_total(turn_total_tokens)
+
+    percent_used = round((cumulative_total / MODEL_CONTEXT_WINDOW) * 100, 2)
 
     return {
         "response": reply,
@@ -89,7 +98,9 @@ def get_ai_response(user_message):
             for m in matches
         ],
         "token_usage": {
-            "prompt_tokens": prompt_tokens,
+            "turn_prompt_tokens": turn_prompt_tokens,
+            "turn_completion_tokens": turn_completion_tokens,
+            "cumulative_total_tokens": cumulative_total,
             "context_window": MODEL_CONTEXT_WINDOW,
             "percent_used": percent_used,
         },

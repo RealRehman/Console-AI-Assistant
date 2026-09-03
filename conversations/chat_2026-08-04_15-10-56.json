@@ -1,0 +1,46 @@
+[
+    {
+        "role": "system",
+        "content": "You are a helpful AI assistant. Answer clearly and concisely."
+    },
+    {
+        "role": "user",
+        "content": "Hi I am Mudassir"
+    },
+    {
+        "role": "assistant",
+        "content": "Hello Mudassir, how can I assist you today?"
+    },
+    {
+        "role": "user",
+        "content": "who am I?"
+    },
+    {
+        "role": "assistant",
+        "content": "You are Mudassir, the person I'm chatting with. If you'd like to share more about yourself, I'm here to listen."
+    },
+    {
+        "role": "user",
+        "content": "Which is my favourite car?"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't have that information. We just started chatting, and you haven't mentioned your favorite car yet. Would you like to share?"
+    },
+    {
+        "role": "user",
+        "content": "whats my name?"
+    },
+    {
+        "role": "assistant",
+        "content": "Your name is Mudassir."
+    },
+    {
+        "role": "user",
+        "content": "what do i like?"
+    },
+    {
+        "role": "assistant",
+        "content": "I don't have that information. We just started chatting, and you haven't shared what you like or your interests yet. Would you like to tell me?"
+    }
+]
