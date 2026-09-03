@@ -32,6 +32,11 @@ RETRIEVED EXCERPTS:
 {context}
 """
 
+# In-memory conversation history (excludes the system prompt, which is
+# rebuilt fresh each turn since it depends on RAG matches for that turn).
+# This lives for as long as the Flask process runs.
+_conversation_history = []
+
 
 def _build_context_block(matches):
     parts = []
@@ -40,18 +45,15 @@ def _build_context_block(matches):
     return "\n\n".join(parts)
 
 
+def clear_conversation():
+    """Wipes the in-memory history — call this for a 'New Chat' action."""
+    _conversation_history.clear()
+
+
 def get_ai_response(user_message):
     """
-    Generates a reply to `user_message`.
-
-    If a document is currently loaded, this retrieves the most
-    relevant chunks for the question (RAG) and answers strictly from
-    them. Otherwise it falls back to the general-purpose mentor
-    system prompt.
-
-    Returns a dict with the reply text plus enough metadata for the
-    UI to show which document chunks were used and the running total
-    of tokens used across the whole session.
+    Generates a reply to `user_message`, using the full conversation
+    history so far as context.
     """
 
     status = get_document_status()
@@ -64,10 +66,10 @@ def get_ai_response(user_message):
     else:
         system_prompt = SYSTEM_PROMPT
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message},
-    ]
+    # System prompt first, then everything said so far, then the new question.
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(_conversation_history)
+    messages.append({"role": "user", "content": user_message})
 
     response = client.chat.completions.create(
         model=MODEL,
@@ -78,16 +80,17 @@ def get_ai_response(user_message):
 
     reply = response.choices[0].message.content
 
+    # Now that we have the reply, commit this turn to history so the
+    # NEXT question can see it too.
+    _conversation_history.append({"role": "user", "content": user_message})
+    _conversation_history.append({"role": "assistant", "content": reply})
+
     # Exact counts from the API for this turn
     turn_prompt_tokens = response.usage.prompt_tokens
     turn_completion_tokens = response.usage.completion_tokens
     turn_total_tokens = response.usage.total_tokens
 
-    # Add this turn's usage to the running session total.
-    # This total is only ever added to, never recomputed from scratch,
-    # so it can never decrease.
     cumulative_total = add_to_cumulative_total(turn_total_tokens)
-
     percent_used = round((cumulative_total / MODEL_CONTEXT_WINDOW) * 100, 2)
 
     return {

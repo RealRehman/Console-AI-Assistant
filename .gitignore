@@ -6,3 +6,6 @@ __pycache__/
 
 logs/
 conversations/uploads/
+
+uploads/
+active_document.pdf
