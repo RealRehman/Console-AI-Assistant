@@ -13,8 +13,11 @@ The actual network calls all go through llm_client.py.
 """
 
 import json
+import os
+from datetime import datetime
 
 from config import ENABLE_TOOLS, MODEL_CONTEXT_WINDOW
+from conversation_manager import CONVERSATION_FOLDER
 from document_store import get_document_status, get_relevant_context
 from exceptions import LLMError, ToolExecutionError
 from llm_client import complete, stream_complete
@@ -28,6 +31,11 @@ from tools import TOOLS, execute_tool
 # This lives for as long as the Flask process runs.
 _conversation_history = []
 
+# Path of the JSON file this running conversation is being saved to.
+# Created lazily on the first saved turn, then reused for every
+# subsequent turn so one chat = one file (instead of one file per turn).
+_current_conversation_file = None
+
 # Safety cap on how many tool-call <-> tool-result round trips we'll do
 # for a single user message, so a confused model can't loop forever.
 MAX_TOOL_ROUNDS = 3
@@ -36,6 +44,36 @@ MAX_TOOL_ROUNDS = 3
 def clear_conversation():
     """Wipes the in-memory history — call this for a 'New Chat' action."""
     _conversation_history.clear()
+
+    global _current_conversation_file
+    _current_conversation_file = None
+
+
+def _persist_conversation():
+    """
+    Writes `_conversation_history` to disk in the conversations/ folder.
+
+    The web app (chat_routes.py) never called conversation_manager.save_
+    conversation(), so chats never made it to disk even though the
+    console app's save/load flow worked fine. This mirrors that same
+    save behavior for every turn, reusing one timestamped file for the
+    lifetime of the in-memory history rather than creating a new file
+    per message.
+    """
+    global _current_conversation_file
+
+    if _current_conversation_file is None:
+        os.makedirs(CONVERSATION_FOLDER, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        _current_conversation_file = os.path.join(
+            CONVERSATION_FOLDER, f"chat_{timestamp}.json"
+        )
+
+    try:
+        with open(_current_conversation_file, "w", encoding="utf-8") as file:
+            json.dump(_conversation_history, file, indent=4, ensure_ascii=False)
+    except OSError as e:
+        logger.error("Could not save conversation to disk: %s", e)
 
 
 def _build_context_block(matches):
@@ -158,6 +196,7 @@ def get_ai_response(user_message):
     # out of the persisted history to keep it small and readable.)
     _conversation_history.append({"role": "user", "content": user_message})
     _conversation_history.append({"role": "assistant", "content": reply})
+    _persist_conversation()
 
     usage = response.usage
     token_usage = _record_usage(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
@@ -242,6 +281,7 @@ def stream_ai_response(user_message):
 
         _conversation_history.append({"role": "user", "content": user_message})
         _conversation_history.append({"role": "assistant", "content": full_reply})
+        _persist_conversation()
 
         token_usage = None
         if usage:
