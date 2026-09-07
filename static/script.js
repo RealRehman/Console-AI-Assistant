@@ -212,6 +212,45 @@ function createSourcesRow(sources) {
   return row;
 }
 
+// ---------- Show which tools were called for a reply (function calling) ----------
+function createToolsRow(toolCalls) {
+  const row = document.createElement('div');
+  row.className = 'tools-row';
+
+  toolCalls.forEach((call) => {
+    const pill = document.createElement('span');
+    pill.className = 'tool-pill';
+    pill.textContent = `🔧 ${call.name}`;
+    pill.title = JSON.stringify(call.arguments) + ' → ' + JSON.stringify(call.result);
+    row.appendChild(pill);
+  });
+
+  return row;
+}
+
+// ---------- Show sentiment / priority / category for a user message (structured output) ----------
+function createAnalysisRow(analysis) {
+  const row = document.createElement('div');
+  row.className = 'analysis-row';
+
+  const sentimentPill = document.createElement('span');
+  sentimentPill.className = `analysis-pill sentiment-${analysis.sentiment}`;
+  sentimentPill.textContent = analysis.sentiment;
+  row.appendChild(sentimentPill);
+
+  const priorityPill = document.createElement('span');
+  priorityPill.className = `analysis-pill priority-${analysis.priority}`;
+  priorityPill.textContent = `${analysis.priority} priority`;
+  row.appendChild(priorityPill);
+
+  const categoryPill = document.createElement('span');
+  categoryPill.className = 'analysis-pill';
+  categoryPill.textContent = analysis.category;
+  row.appendChild(categoryPill);
+
+  return row;
+}
+
 
 // ---------- Scroll reveal (IntersectionObserver) ----------
 const revealObserver = new IntersectionObserver(
@@ -233,7 +272,27 @@ function observeRow(row) {
 document.querySelectorAll('.row').forEach((row) => observeRow(row));
 
 
-// ---------- Send a message ----------
+// ---------- Structured-output demo: tag the user's own message ----------
+async function analyzeMessage(userRow, text) {
+  try {
+    const response = await fetch('/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+
+    if (!response.ok) return; // best-effort only; never blocks the chat
+
+    const analysis = await response.json();
+    const analysisRow = createAnalysisRow(analysis);
+    userRow.after(analysisRow);
+  } catch (error) {
+    console.error('Analysis unavailable:', error);
+  }
+}
+
+
+// ---------- Send a message (streamed) ----------
 async function sendMessage() {
   const text = input.value.trim();
   if (!text) return;
@@ -242,54 +301,121 @@ async function sendMessage() {
   chat.appendChild(userRow);
   observeRow(userRow);
 
+  // Fire-and-forget structured-output classification of the user's message.
+  analyzeMessage(userRow, text);
+
   input.value = '';
   autoResize();
   scrollToBottom();
 
   showTyping();
 
+  const aiRow = createRow('', 'ai');
+  const bubble = aiRow.querySelector('.bubble');
+  let toolsUsed = [];
+  let hasStartedStreaming = false;
+
   try {
-    const response = await fetch('/chat', {
+    const response = await fetch('/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text })
     });
 
-    const data = await response.json();
-
-    hideTyping();
-
-    if (!response.ok) {
+    if (!response.ok || !response.body) {
+      const data = await response.json().catch(() => ({}));
       throw new Error(data.error || 'Something went wrong.');
     }
 
-    const aiRow = createRow(data.response, 'ai');
-    chat.appendChild(aiRow);
-    observeRow(aiRow);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
 
-    if (data.used_rag && data.sources && data.sources.length) {
-      const sourcesRow = createSourcesRow(data.sources);
-      chat.appendChild(sourcesRow);
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE frames are separated by a blank line ("\n\n").
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop(); // last (possibly incomplete) frame stays buffered
+
+      for (const frame of frames) {
+        const line = frame.split('\n').find((l) => l.startsWith('data:'));
+        if (!line) continue;
+
+        const jsonStr = line.slice(5).trim();
+        if (!jsonStr) continue;
+
+        let event;
+        try {
+          event = JSON.parse(jsonStr);
+        } catch (e) {
+          continue;
+        }
+
+        if (event.type === 'token') {
+          if (!hasStartedStreaming) {
+            hideTyping();
+            chat.appendChild(aiRow);
+            observeRow(aiRow);
+            bubble.classList.add('streaming');
+            hasStartedStreaming = true;
+          }
+          bubble.textContent += event.content;
+          scrollToBottom();
+
+        } else if (event.type === 'tool_call') {
+          toolsUsed.push(event);
+
+        } else if (event.type === 'meta') {
+          if (event.used_rag && event.sources && event.sources.length) {
+            aiRow.dataset.sources = JSON.stringify(event.sources);
+          }
+
+        } else if (event.type === 'done') {
+          if (!hasStartedStreaming) {
+            hideTyping();
+            chat.appendChild(aiRow);
+            observeRow(aiRow);
+          }
+          bubble.classList.remove('streaming');
+
+          if (toolsUsed.length) {
+            const toolsRow = createToolsRow(toolsUsed);
+            aiRow.after(toolsRow);
+          }
+
+          if (aiRow.dataset.sources) {
+            const sourcesRow = createSourcesRow(JSON.parse(aiRow.dataset.sources));
+            aiRow.after(sourcesRow);
+          }
+
+          if (event.token_usage) {
+            updateTokenBar(event.token_usage.cumulative_total_tokens, event.token_usage.context_window);
+          }
+
+          scrollToBottom();
+
+        } else if (event.type === 'error') {
+          throw new Error(event.message || 'Something went wrong.');
+        }
+      }
     }
-
-    if (data.token_usage) {
-     updateTokenBar(data.token_usage.cumulative_total_tokens, data.token_usage.context_window);  // ✅
-    }
-
-    scrollToBottom();
 
   } catch (error) {
     hideTyping();
 
-    const aiRow = createRow(
-      error.message || 'Unable to connect to the server.',
-      'ai'
-    );
+    if (!hasStartedStreaming) {
+      bubble.textContent = error.message || 'Unable to connect to the server.';
+      chat.appendChild(aiRow);
+      observeRow(aiRow);
+    } else {
+      bubble.textContent += `\n\n⚠️ ${error.message || 'Connection lost.'}`;
+    }
 
-    chat.appendChild(aiRow);
-    observeRow(aiRow);
     scrollToBottom();
-
     console.error(error);
   }
 }
