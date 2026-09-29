@@ -1,11 +1,18 @@
 import json
 import os
+import uuid
 
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
-from chat import get_ai_response, stream_ai_response
+from chat import clear_conversation, get_ai_response, stream_ai_response
 from config import MODEL_CONTEXT_WINDOW
-from document_store import clear_document, get_document_status, load_document
+from document_store import (
+    clear_all_documents,
+    get_document_status,
+    load_document,
+    remove_document,
+)
+from rag.parsers import SUPPORTED_EXTENSIONS
 from exceptions import (
     LLMAPIError,
     LLMConnectionError,
@@ -23,12 +30,7 @@ chat_bp = Blueprint("chat", __name__)
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-ALLOWED_EXTENSIONS = (".docx", ".pdf")
 
-
-# ---------------------------------------------------------------------
-# Error handling helpers
-# ---------------------------------------------------------------------
 def _status_for(exc: LLMError) -> int:
     if isinstance(exc, LLMTimeoutError):
         return 504
@@ -45,7 +47,11 @@ def _status_for(exc: LLMError) -> int:
 
 @chat_bp.route("/upload", methods=["POST"])
 def upload_document():
-
+    """
+    Adds a document to the library (Week 7: PDF, DOCX, TXT, Markdown).
+    Unlike earlier weeks, this does NOT replace previously loaded
+    documents -- multiple documents can be loaded at once.
+    """
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
@@ -57,32 +63,39 @@ def upload_document():
     filename = file.filename
     lowered = filename.lower()
 
-    if not lowered.endswith(ALLOWED_EXTENSIONS):
+    if not lowered.endswith(SUPPORTED_EXTENSIONS):
         return jsonify({
-            "error": "Only .docx and .pdf files are supported"
+            "error": f"Unsupported file type. Supported: {', '.join(SUPPORTED_EXTENSIONS)}"
         }), 400
 
-    extension = ".pdf" if lowered.endswith(".pdf") else ".docx"
-    file_path = os.path.join(UPLOAD_DIR, f"active_document{extension}")
-
+    extension = os.path.splitext(lowered)[1]
+    # Unique temp filename -- multiple documents can be in flight/stored
+    # at once, so we can no longer reuse one fixed "active_document" path.
+    file_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}{extension}")
     file.save(file_path)
 
     try:
-        load_document(file_path, original_filename=filename)
+        doc = load_document(file_path, original_filename=filename)
     except ValueError as e:
         logger.warning("Document upload rejected (%s): %s", filename, e)
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.exception("Could not read uploaded document: %s", filename)
-        return jsonify({
-            "error": f"Could not read document: {str(e)}"
-        }), 400
+        return jsonify({"error": f"Could not read document: {str(e)}"}), 400
+    finally:
+        # The extracted text is already indexed in Qdrant; the raw
+        # upload on disk isn't needed after ingestion.
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
 
-    logger.info("Document indexed: %s", filename)
+    logger.info("Document indexed: %s (%s chunks)", filename, doc["chunk_count"])
 
     return jsonify({
         "message": "Document uploaded and indexed successfully",
-        "document": get_document_status(),
+        "document": doc,
+        "library": get_document_status(),
     })
 
 
@@ -91,11 +104,22 @@ def document_status():
     return jsonify(get_document_status())
 
 
-@chat_bp.route("/document", methods=["DELETE"])
-def remove_document():
-    clear_document()
-    logger.info("Document cleared")
-    return jsonify({"message": "Document cleared", "document": get_document_status()})
+@chat_bp.route("/document/<doc_id>", methods=["DELETE"])
+def remove_one_document(doc_id):
+    try:
+        remove_document(doc_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+
+    logger.info("Document removed: %s", doc_id)
+    return jsonify({"message": "Document removed", "library": get_document_status()})
+
+
+@chat_bp.route("/documents", methods=["DELETE"])
+def remove_all_documents():
+    clear_all_documents()
+    logger.info("All documents cleared")
+    return jsonify({"message": "All documents cleared", "library": get_document_status()})
 
 
 @chat_bp.route("/chat", methods=["POST"])
@@ -111,30 +135,19 @@ def chat():
         result = get_ai_response(message)
         logger.info("AI: %s", result["response"])
 
-        return jsonify({
-            "response": result["response"],
-            "used_rag": result["used_rag"],
-            "sources": result["sources"],
-            "tools_used": result["tools_used"],
-            "token_usage": result["token_usage"],
-        })
+        return jsonify(result)
 
     except LLMError as e:
         logger.error("Chat request failed: %s", e)
         return jsonify({"error": str(e)}), _status_for(e)
 
-    except Exception as e:
+    except Exception:
         logger.exception("Unexpected error in /chat")
         return jsonify({"error": "An unexpected error occurred."}), 500
 
 
 @chat_bp.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    """
-    Server-Sent-Events endpoint. Each event is a line of the form
-    'data: <json>\\n\\n', where the JSON payload matches the event
-    dicts yielded by chat.stream_ai_response().
-    """
     data = request.get_json(silent=True) or {}
     message = (data.get("message") or "").strip()
 
@@ -150,19 +163,18 @@ def chat_stream():
     return Response(
         stream_with_context(event_stream()),
         mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # disable proxy buffering, if any
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@chat_bp.route("/chat/clear", methods=["POST"])
+def chat_clear():
+    clear_conversation()
+    return jsonify({"message": "Conversation cleared"})
 
 
 @chat_bp.route("/analyze", methods=["POST"])
 def analyze():
-    """
-    Structured-output demo: classifies a message's sentiment, priority,
-    and category as a validated JSON object (see models.MessageAnalysis).
-    """
     try:
         data = request.get_json(silent=True) or {}
         message = (data.get("message") or "").strip()
@@ -177,13 +189,11 @@ def analyze():
         logger.error("Analyze request failed: %s", e)
         return jsonify({"error": str(e)}), _status_for(e)
 
-    except Exception as e:
+    except Exception:
         logger.exception("Unexpected error in /analyze")
         return jsonify({"error": "An unexpected error occurred."}), 500
 
 
 @chat_bp.route("/limits", methods=["GET"])
 def limits():
-    """Static info the frontend uses to render the token-limit bar
-    before any message has been sent."""
     return jsonify({"context_window": MODEL_CONTEXT_WINDOW})

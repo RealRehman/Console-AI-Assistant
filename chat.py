@@ -1,23 +1,21 @@
 """
 chat.py — orchestrates a single conversation turn.
 
-Responsibilities:
-  - decide whether this turn should use RAG (a document is loaded) or
-    the plain assistant system prompt
-  - run the function/tool-calling loop (LLM decides -> app executes ->
-    tool result -> LLM), for both non-streaming and streaming replies
-  - keep the in-memory conversation history
-  - track token usage for the UI's context-window bar
+Week 7 adds real RAG: when one or more documents are loaded, every
+turn retrieves the most relevant chunks (with citation metadata),
+builds an explicit SYSTEM INSTRUCTIONS / CONTEXT / RESPONSE
+REQUIREMENTS prompt (prompts.DOCUMENT_QA_INSTRUCTIONS), and returns
+both the model's answer AND the raw retrieved chunks as structured
+"sources" -- so citations shown to the user don't depend on the model
+remembering to mention them correctly.
 
-The actual network calls all go through llm_client.py.
+Function/tool calling (Week 5) still runs alongside RAG: the model can
+call a tool AND answer from document context in the same turn.
 """
 
 import json
-import os
-from datetime import datetime
 
 from config import ENABLE_TOOLS, MODEL_CONTEXT_WINDOW
-from conversation_manager import CONVERSATION_FOLDER
 from document_store import get_document_status, get_relevant_context
 from exceptions import LLMError, ToolExecutionError
 from llm_client import complete, stream_complete
@@ -26,77 +24,63 @@ from prompts import DOCUMENT_QA_INSTRUCTIONS, SYSTEM_PROMPT, TOOL_SYSTEM_ADDENDU
 from rag.token_utils import add_to_cumulative_total
 from tools import TOOLS, execute_tool
 
-# In-memory conversation history (excludes the system prompt, which is
-# rebuilt fresh each turn since it depends on RAG matches for that turn).
-# This lives for as long as the Flask process runs.
 _conversation_history = []
-
-# Path of the JSON file this running conversation is being saved to.
-# Created lazily on the first saved turn, then reused for every
-# subsequent turn so one chat = one file (instead of one file per turn).
-_current_conversation_file = None
-
-# Safety cap on how many tool-call <-> tool-result round trips we'll do
-# for a single user message, so a confused model can't loop forever.
 MAX_TOOL_ROUNDS = 3
 
 
 def clear_conversation():
-    """Wipes the in-memory history — call this for a 'New Chat' action."""
     _conversation_history.clear()
 
-    global _current_conversation_file
-    _current_conversation_file = None
 
-
-def _persist_conversation():
-    """
-    Writes `_conversation_history` to disk in the conversations/ folder.
-
-    The web app (chat_routes.py) never called conversation_manager.save_
-    conversation(), so chats never made it to disk even though the
-    console app's save/load flow worked fine. This mirrors that same
-    save behavior for every turn, reusing one timestamped file for the
-    lifetime of the in-memory history rather than creating a new file
-    per message.
-    """
-    global _current_conversation_file
-
-    if _current_conversation_file is None:
-        os.makedirs(CONVERSATION_FOLDER, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        _current_conversation_file = os.path.join(
-            CONVERSATION_FOLDER, f"chat_{timestamp}.json"
-        )
-
-    try:
-        with open(_current_conversation_file, "w", encoding="utf-8") as file:
-            json.dump(_conversation_history, file, indent=4, ensure_ascii=False)
-    except OSError as e:
-        logger.error("Could not save conversation to disk: %s", e)
+def _format_source_label(match):
+    """'<filename>, Page <n>' / '<filename>, Section "<name>"' / '<filename>'."""
+    if match.get("page"):
+        return f'{match["source"]}, Page {match["page"]}'
+    if match.get("section"):
+        return f'{match["source"]}, Section "{match["section"]}"'
+    return match["source"]
 
 
 def _build_context_block(matches):
+    if not matches:
+        return "No relevant excerpts were found in the uploaded document(s) for this question."
+
     parts = []
-    for match in matches:
-        parts.append(f"[Chunk {match['chunk_index']}] {match['text']}")
-    return "\n\n".join(parts)
+    for i, match in enumerate(matches, start=1):
+        parts.append(f"[Excerpt {i} | Source: {_format_source_label(match)}]\n{match['text']}")
+    return "\n\n---\n\n".join(parts)
 
 
 def _build_system_prompt(user_message):
     """Returns (system_prompt, rag_matches) for this turn."""
     status = get_document_status()
-    matches = get_relevant_context(user_message) if status["loaded"] else []
 
-    if matches:
+    if status["loaded"]:
+        matches = get_relevant_context(user_message)
         system_prompt = DOCUMENT_QA_INSTRUCTIONS.format(context=_build_context_block(matches))
     else:
+        matches = []
         system_prompt = SYSTEM_PROMPT
 
     if ENABLE_TOOLS:
         system_prompt = f"{system_prompt}\n\n{TOOL_SYSTEM_ADDENDUM}"
 
     return system_prompt, matches
+
+
+def _sources_payload(matches):
+    return [
+        {
+            "doc_id": m["doc_id"],
+            "source": m["source"],
+            "page": m.get("page"),
+            "section": m.get("section"),
+            "chunk_index": m.get("chunk_index"),
+            "score": m["score"],
+            "label": _format_source_label(m),
+        }
+        for m in matches
+    ]
 
 
 def _record_usage(prompt_tokens, completion_tokens, total_tokens):
@@ -112,12 +96,6 @@ def _record_usage(prompt_tokens, completion_tokens, total_tokens):
 
 
 def _run_tool_calls(tool_calls, messages):
-    """
-    Executes a batch of tool calls (list of {id, name, arguments} dicts,
-    arguments as a raw JSON string), appends the results as `tool`
-    messages onto `messages`, and returns the records used for the
-    frontend / logging.
-    """
     records = []
     for call in tool_calls:
         name = call["name"]
@@ -135,11 +113,7 @@ def _run_tool_calls(tool_calls, messages):
             logger.error("Tool execution failed for %s: %s", name, e)
 
         records.append({"name": name, "arguments": args, "result": result})
-        messages.append({
-            "role": "tool",
-            "tool_call_id": call["id"],
-            "content": json.dumps(result),
-        })
+        messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result)})
 
     return records
 
@@ -148,11 +122,6 @@ def _run_tool_calls(tool_calls, messages):
 # Non-streaming
 # ---------------------------------------------------------------------
 def get_ai_response(user_message):
-    """
-    Generates a reply to `user_message`, using the full conversation
-    history so far as context. Automatically resolves any tool calls
-    the model asks for before returning the final answer.
-    """
     system_prompt, matches = _build_system_prompt(user_message)
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -171,19 +140,11 @@ def get_ai_response(user_message):
                 "role": "assistant",
                 "content": choice.message.content,
                 "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
+                    {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
                     for tc in choice.message.tool_calls
                 ],
             })
-
-            calls = [
-                {"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments}
-                for tc in choice.message.tool_calls
-            ]
+            calls = [{"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments} for tc in choice.message.tool_calls]
             tools_used.extend(_run_tool_calls(calls, messages))
             continue
 
@@ -191,12 +152,8 @@ def get_ai_response(user_message):
 
     reply = response.choices[0].message.content or ""
 
-    # Now that we have the final reply, commit this turn to history so
-    # the NEXT question can see it too. (Tool-call round trips are kept
-    # out of the persisted history to keep it small and readable.)
     _conversation_history.append({"role": "user", "content": user_message})
     _conversation_history.append({"role": "assistant", "content": reply})
-    _persist_conversation()
 
     usage = response.usage
     token_usage = _record_usage(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
@@ -204,7 +161,7 @@ def get_ai_response(user_message):
     return {
         "response": reply,
         "used_rag": bool(matches),
-        "sources": [{"chunk_index": m["chunk_index"], "score": m["score"]} for m in matches],
+        "sources": _sources_payload(matches),
         "tools_used": tools_used,
         "token_usage": token_usage,
     }
@@ -214,19 +171,6 @@ def get_ai_response(user_message):
 # Streaming
 # ---------------------------------------------------------------------
 def stream_ai_response(user_message):
-    """
-    Generator yielding SSE-friendly event dicts for a streamed reply:
-
-      {"type": "meta", "used_rag": bool, "sources": [...]}
-      {"type": "tool_call", "name": str, "arguments": dict, "result": dict}
-      {"type": "token", "content": str}
-      {"type": "done", "token_usage": {...} | None}
-      {"type": "error", "message": str}
-
-    Tool calls (if any) happen *between* rounds of streamed text: the
-    model streams up to the point it decides it needs a tool, we run
-    the tool, feed the result back, and let it keep streaming.
-    """
     try:
         system_prompt, matches = _build_system_prompt(user_message)
 
@@ -234,11 +178,7 @@ def stream_ai_response(user_message):
         messages.extend(_conversation_history)
         messages.append({"role": "user", "content": user_message})
 
-        yield {
-            "type": "meta",
-            "used_rag": bool(matches),
-            "sources": [{"chunk_index": m["chunk_index"], "score": m["score"]} for m in matches],
-        }
+        yield {"type": "meta", "used_rag": bool(matches), "sources": _sources_payload(matches)}
 
         full_reply = ""
         usage = None
@@ -257,45 +197,31 @@ def stream_ai_response(user_message):
                 break
 
             if round_result["type"] == "tool_calls":
-                calls = [
-                    {"id": c["id"], "name": c["name"], "arguments": c["arguments"]}
-                    for c in round_result["tool_calls"].values()
-                ]
+                calls = [{"id": c["id"], "name": c["name"], "arguments": c["arguments"]} for c in round_result["tool_calls"].values()]
                 messages.append({
                     "role": "assistant",
                     "content": round_result["content"] or None,
-                    "tool_calls": [
-                        {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}}
-                        for c in calls
-                    ],
+                    "tool_calls": [{"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls],
                 })
-
                 for record in _run_tool_calls(calls, messages):
                     yield {"type": "tool_call", **record}
-
                 continue
 
-            # "final"
             usage = round_result["usage"]
             break
 
         _conversation_history.append({"role": "user", "content": user_message})
         _conversation_history.append({"role": "assistant", "content": full_reply})
-        _persist_conversation()
 
         token_usage = None
         if usage:
-            token_usage = _record_usage(
-                usage.get("prompt_tokens", 0),
-                usage.get("completion_tokens", 0),
-                usage.get("total_tokens", 0),
-            )
+            token_usage = _record_usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), usage.get("total_tokens", 0))
 
         yield {"type": "done", "token_usage": token_usage}
 
     except LLMError as e:
         logger.error("Streaming error: %s", e)
         yield {"type": "error", "message": str(e)}
-    except Exception as e:
+    except Exception:
         logger.exception("Unexpected streaming error")
         yield {"type": "error", "message": "An unexpected error occurred while generating a response."}

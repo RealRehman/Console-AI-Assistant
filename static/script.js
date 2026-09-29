@@ -1,5 +1,5 @@
 // ============================================
-// AI Assistant Chat — script.js
+// AI Assistant Chat — script.js (Week 7: multi-document RAG + citations)
 // ============================================
 
 const chat = document.getElementById('chat');
@@ -9,14 +9,11 @@ const input = document.getElementById('messageInput');
 const sendBtn = document.getElementById('sendBtn');
 const typingRow = document.getElementById('typingRow');
 
-// ---------- Document / RAG panel ----------
+// ---------- Document library panel ----------
 const documentInput = document.getElementById('documentInput');
 const uploadBtn = document.getElementById('uploadBtn');
 const docDropzone = document.getElementById('docDropzone');
-const docCard = document.getElementById('docCard');
-const docName = document.getElementById('docName');
-const docMeta = document.getElementById('docMeta');
-const removeDocBtn = document.getElementById('removeDocBtn');
+const docList = document.getElementById('docList');
 
 // ---------- Token usage bar ----------
 const tokenLabel = document.getElementById('tokenLabel');
@@ -25,7 +22,7 @@ const tokenBarFill = document.getElementById('tokenBarFill');
 
 let contextWindow = 0;
 
-// ---------- Boot: load current document + model limits ----------
+// ---------- Boot: load current library + model limits ----------
 (async function init() {
   try {
     const limitsRes = await fetch('/limits');
@@ -39,25 +36,68 @@ let contextWindow = 0;
   try {
     const statusRes = await fetch('/document/status');
     const status = await statusRes.json();
-    renderDocumentStatus(status);
+    renderDocumentLibrary(status);
   } catch (e) {
     console.error('Could not load document status', e);
   }
 })();
 
-function renderDocumentStatus(status) {
-  if (status && status.loaded) {
-    docDropzone.hidden = true;
-    docCard.hidden = false;
-    docName.textContent = status.filename;
-    docMeta.textContent =
-      `${status.chunk_count} chunks · ~${status.total_tokens.toLocaleString()} tokens indexed`;
-    headerSubtitle.textContent = `Chatting with ${status.filename}`;
-  } else {
-    docDropzone.hidden = false;
-    docCard.hidden = true;
+function renderDocumentLibrary(status) {
+  docList.innerHTML = '';
+
+  if (!status || !status.loaded) {
     headerSubtitle.textContent = 'Powered by LLM';
+    return;
   }
+
+  headerSubtitle.textContent =
+    `Chatting with ${status.document_count} document${status.document_count === 1 ? '' : 's'}`;
+
+  status.documents.forEach((doc) => {
+    const card = document.createElement('div');
+    card.className = 'doc-card';
+    card.dataset.docId = doc.doc_id;
+
+    const icon = document.createElement('div');
+    icon.className = 'doc-card-icon';
+    icon.textContent = '📄';
+
+    const info = document.createElement('div');
+    info.className = 'doc-card-info';
+
+    const name = document.createElement('strong');
+    name.textContent = doc.filename;
+
+    const metaRow = document.createElement('div');
+    metaRow.className = 'doc-card-meta-row';
+
+    const meta = document.createElement('span');
+    meta.textContent = `${doc.chunk_count} chunks · ~${doc.total_tokens.toLocaleString()} tokens`;
+    metaRow.appendChild(meta);
+
+    if (doc.duplicate_of) {
+      const badge = document.createElement('span');
+      badge.className = 'doc-duplicate-badge';
+      badge.title = 'Identical content to an already-loaded document';
+      badge.textContent = 'Duplicate content';
+      metaRow.appendChild(badge);
+    }
+
+    info.appendChild(name);
+    info.appendChild(metaRow);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'doc-btn doc-btn-ghost';
+    removeBtn.type = 'button';
+    removeBtn.title = 'Remove this document';
+    removeBtn.textContent = 'Remove';
+    removeBtn.addEventListener('click', () => removeDocument(doc.doc_id));
+
+    card.appendChild(icon);
+    card.appendChild(info);
+    card.appendChild(removeBtn);
+    docList.appendChild(card);
+  });
 }
 
 function updateTokenBar(promptTokens, windowSize) {
@@ -77,13 +117,12 @@ function updateTokenBar(promptTokens, windowSize) {
   }
 }
 
-// ---------- Upload ----------
+// ---------- Upload (one or more files) ----------
 uploadBtn.addEventListener('click', () => documentInput.click());
 documentInput.addEventListener('change', () => {
-  if (documentInput.files[0]) uploadDocument(documentInput.files[0]);
+  if (documentInput.files.length) uploadDocuments(Array.from(documentInput.files));
 });
 
-// Drag & drop support
 ['dragenter', 'dragover'].forEach((evt) => {
   docDropzone.addEventListener(evt, (e) => {
     e.preventDefault();
@@ -99,63 +138,64 @@ documentInput.addEventListener('change', () => {
 });
 
 docDropzone.addEventListener('drop', (e) => {
-  const file = e.dataTransfer.files[0];
-  if (file) uploadDocument(file);
+  const files = Array.from(e.dataTransfer.files || []);
+  if (files.length) uploadDocuments(files);
 });
 
-async function uploadDocument(file) {
+async function uploadDocuments(files) {
+  const allowed = /\.(docx|pdf|txt|md|markdown)$/i;
+  const valid = files.filter((f) => allowed.test(f.name));
 
-  const fileName = file.name.toLowerCase();
-
-  if (!fileName.endsWith('.docx') && !fileName.endsWith('.pdf')) {
-    alert('Only .docx and .pdf files are supported.');
+  if (!valid.length) {
+    alert('Only PDF, DOCX, TXT, and Markdown files are supported.');
     return;
   }
 
-  const formData = new FormData();
-  formData.append('file', file);
+  uploadBtn.disabled = true;
+  const originalLabel = uploadBtn.textContent;
 
   try {
-    uploadBtn.disabled = true;
-    uploadBtn.textContent = 'Uploading...';
-
-    const response = await fetch('/upload', {
-      method: 'POST',
-      body: formData
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Upload failed.');
+    for (let i = 0; i < valid.length; i++) {
+      uploadBtn.textContent = `Uploading ${i + 1}/${valid.length}...`;
+      await uploadOneDocument(valid[i]);
     }
-
-    renderDocumentStatus(data.document);
-
-  } catch (error) {
-    console.error(error);
-    alert(error.message || 'Unable to upload the document.');
-
   } finally {
     uploadBtn.disabled = false;
-    uploadBtn.textContent = 'Upload Document';
+    uploadBtn.textContent = originalLabel;
     documentInput.value = '';
   }
 }
 
-removeDocBtn.addEventListener('click', async () => {
+async function uploadOneDocument(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+
   try {
-    removeDocBtn.disabled = true;
-    const response = await fetch('/document', { method: 'DELETE' });
+    const response = await fetch('/upload', { method: 'POST', body: formData });
     const data = await response.json();
-    renderDocumentStatus(data.document);
+
+    if (!response.ok) {
+      throw new Error(data.error || `Upload failed for ${file.name}.`);
+    }
+
+    renderDocumentLibrary(data.library);
   } catch (error) {
     console.error(error);
-    alert('Unable to remove the document.');
-  } finally {
-    removeDocBtn.disabled = false;
+    alert(error.message || `Unable to upload ${file.name}.`);
   }
-});
+}
+
+async function removeDocument(docId) {
+  try {
+    const response = await fetch(`/document/${docId}`, { method: 'DELETE' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not remove document.');
+    renderDocumentLibrary(data.library);
+  } catch (error) {
+    console.error(error);
+    alert(error.message || 'Unable to remove the document.');
+  }
+}
 
 
 // ---------- Auto-resize the textarea as you type ----------
@@ -166,8 +206,6 @@ function autoResize() {
 
 input.addEventListener('input', autoResize);
 
-
-// ---------- Enter to send, Shift+Enter for a new line ----------
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -178,7 +216,7 @@ input.addEventListener('keydown', (e) => {
 sendBtn.addEventListener('click', sendMessage);
 
 
-// ---------- Create a message bubble ----------
+// ---------- Message bubble helpers ----------
 function createRow(text, sender) {
   const row = document.createElement('div');
   row.className = `row ${sender}`;
@@ -193,26 +231,31 @@ function createRow(text, sender) {
 
   row.appendChild(avatar);
   row.appendChild(bubble);
-
   return row;
 }
 
-// ---------- Show which document chunks a reply was grounded in ----------
+// Citations: each source is {source, page, section, score, label}
 function createSourcesRow(sources) {
   const row = document.createElement('div');
   row.className = 'sources-row';
 
   sources.forEach((source) => {
     const pill = document.createElement('span');
-    pill.className = 'source-pill';
-    pill.textContent = `Chunk ${source.chunk_index} · ${Math.round(source.score * 100)}% match`;
+    pill.className = 'source-pill citation-pill';
+    pill.textContent = `${source.label} · ${Math.round(source.score * 100)}%`;
     row.appendChild(pill);
   });
 
   return row;
 }
 
-// ---------- Show which tools were called for a reply (function calling) ----------
+function createNoContextNote() {
+  const note = document.createElement('div');
+  note.className = 'no-context-note';
+  note.textContent = 'No excerpt in the loaded document(s) scored as relevant to this question.';
+  return note;
+}
+
 function createToolsRow(toolCalls) {
   const row = document.createElement('div');
   row.className = 'tools-row';
@@ -228,7 +271,6 @@ function createToolsRow(toolCalls) {
   return row;
 }
 
-// ---------- Show sentiment / priority / category for a user message (structured output) ----------
 function createAnalysisRow(analysis) {
   const row = document.createElement('div');
   row.className = 'analysis-row';
@@ -252,7 +294,7 @@ function createAnalysisRow(analysis) {
 }
 
 
-// ---------- Scroll reveal (IntersectionObserver) ----------
+// ---------- Scroll reveal ----------
 const revealObserver = new IntersectionObserver(
   (entries) => {
     entries.forEach((entry) => {
@@ -280,12 +322,9 @@ async function analyzeMessage(userRow, text) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text })
     });
-
-    if (!response.ok) return; // best-effort only; never blocks the chat
-
+    if (!response.ok) return;
     const analysis = await response.json();
-    const analysisRow = createAnalysisRow(analysis);
-    userRow.after(analysisRow);
+    userRow.after(createAnalysisRow(analysis));
   } catch (error) {
     console.error('Analysis unavailable:', error);
   }
@@ -301,7 +340,6 @@ async function sendMessage() {
   chat.appendChild(userRow);
   observeRow(userRow);
 
-  // Fire-and-forget structured-output classification of the user's message.
   analyzeMessage(userRow, text);
 
   input.value = '';
@@ -313,6 +351,8 @@ async function sendMessage() {
   const aiRow = createRow('', 'ai');
   const bubble = aiRow.querySelector('.bubble');
   let toolsUsed = [];
+  let usedRag = false;
+  let sources = [];
   let hasStartedStreaming = false;
 
   try {
@@ -336,15 +376,12 @@ async function sendMessage() {
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-
-      // SSE frames are separated by a blank line ("\n\n").
       const frames = buffer.split('\n\n');
-      buffer = frames.pop(); // last (possibly incomplete) frame stays buffered
+      buffer = frames.pop();
 
       for (const frame of frames) {
         const line = frame.split('\n').find((l) => l.startsWith('data:'));
         if (!line) continue;
-
         const jsonStr = line.slice(5).trim();
         if (!jsonStr) continue;
 
@@ -370,9 +407,8 @@ async function sendMessage() {
           toolsUsed.push(event);
 
         } else if (event.type === 'meta') {
-          if (event.used_rag && event.sources && event.sources.length) {
-            aiRow.dataset.sources = JSON.stringify(event.sources);
-          }
+          usedRag = event.used_rag;
+          sources = event.sources || [];
 
         } else if (event.type === 'done') {
           if (!hasStartedStreaming) {
@@ -383,13 +419,15 @@ async function sendMessage() {
           bubble.classList.remove('streaming');
 
           if (toolsUsed.length) {
-            const toolsRow = createToolsRow(toolsUsed);
-            aiRow.after(toolsRow);
+            aiRow.after(createToolsRow(toolsUsed));
           }
 
-          if (aiRow.dataset.sources) {
-            const sourcesRow = createSourcesRow(JSON.parse(aiRow.dataset.sources));
-            aiRow.after(sourcesRow);
+          if (usedRag) {
+            if (sources.length) {
+              aiRow.after(createSourcesRow(sources));
+            } else {
+              aiRow.after(createNoContextNote());
+            }
           }
 
           if (event.token_usage) {
@@ -422,20 +460,13 @@ async function sendMessage() {
 
 
 // ---------- Typing indicator ----------
-function showTyping() {
-  typingRow.hidden = false;
-}
-
-function hideTyping() {
-  typingRow.hidden = true;
-}
-
+function showTyping() { typingRow.hidden = false; }
+function hideTyping() { typingRow.hidden = true; }
 
 // ---------- Smooth scroll ----------
 function scrollToBottom() {
   chat.scrollTo({ top: chat.scrollHeight, behavior: 'smooth' });
 }
-
 
 // ---------- Header shadow on scroll ----------
 chat.addEventListener('scroll', () => {
@@ -446,6 +477,4 @@ chat.addEventListener('scroll', () => {
   }
 });
 
-
-// ---------- Initial scroll position ----------
 scrollToBottom();

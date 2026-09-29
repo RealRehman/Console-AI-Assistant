@@ -36,9 +36,9 @@
   <!-- Document / RAG panel -->
   <section class="doc-panel" id="docPanel">
 
-    <!-- Empty state: drop zone -->
+    <!-- Drop zone: always available -- multiple documents can be loaded at once -->
     <div class="doc-dropzone" id="docDropzone">
-      <input type="file" id="documentInput" accept=".docx,.pdf" hidden />
+      <input type="file" id="documentInput" accept=".docx,.pdf,.txt,.md,.markdown" multiple hidden />
 
       <svg class="doc-dropzone-icon" viewBox="0 0 24 24" fill="none">
         <path d="M12 4v11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
@@ -47,28 +47,17 @@
       </svg>
 
       <div class="doc-dropzone-text">
-        <strong>Add a document</strong>
-        <span>Drop a PDF or DOCX here, or click to browse — ask questions about its contents</span>
+        <strong>Add documents</strong>
+        <span>Drop PDF / DOCX / TXT / Markdown files here, or click to browse — ask questions across all of them</span>
       </div>
 
       <button id="uploadBtn" type="button" class="doc-btn doc-btn-primary">
-        Upload Document
+        Upload Document(s)
       </button>
     </div>
 
-    <!-- Loaded state: document card -->
-    <div class="doc-card" id="docCard" hidden>
-      <div class="doc-card-icon">📄</div>
-
-      <div class="doc-card-info">
-        <strong id="docName">document.pdf</strong>
-        <span id="docMeta">0 chunks · 0 tokens</span>
-      </div>
-
-      <button id="removeDocBtn" class="doc-btn doc-btn-ghost" type="button" title="Remove document">
-        Remove
-      </button>
-    </div>
+    <!-- Document library: one card per loaded document, filled in by script.js -->
+    <div class="doc-list" id="docList"></div>
 
     <!-- Token limit bar -->
     <div class="token-bar-wrap" title="Approximate tokens used in the last request, out of the model's context window">
@@ -88,7 +77,7 @@
 
     <div class="row ai">
       <div class="avatar">🤖</div>
-      <div class="bubble">Hi! Upload a document above and ask me anything about it, or just chat with me directly.</div>
+      <div class="bubble">Hi! Upload one or more documents above and ask me anything about them — I'll cite the source and page/section for every answer — or just chat with me directly.</div>
     </div>
 
   </main>

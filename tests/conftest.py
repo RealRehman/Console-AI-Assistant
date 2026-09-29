@@ -1,0 +1,8 @@
+import os
+import sys
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+os.environ.setdefault("GROQ_API_KEY", "test-key-for-unit-tests")

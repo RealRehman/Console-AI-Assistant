@@ -3,6 +3,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+RAG_CHUNK_SIZE = 180
+RAG_CHUNK_OVERLAP = 40
+
+
+RAG_TOP_K = 4
+
+
+RAG_CHUNK_SIZE = 180
+RAG_CHUNK_OVERLAP = 40
+RAG_TOP_K = 4
+
+
 # API Key
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -45,9 +58,34 @@ ENABLE_TOOLS = os.getenv("LLM_ENABLE_TOOLS", "true").strip().lower() == "true"
 # Target size (in words) of each document chunk, and how many words
 # of overlap to keep between consecutive chunks so context isn't lost
 # at chunk boundaries.
-RAG_CHUNK_SIZE = 180
-RAG_CHUNK_OVERLAP = 40
 
 
-RAG_TOP_K = 4
 
+# RAG_CHUNK_SIZE = 180
+# RAG_CHUNK_OVERLAP = 40
+
+
+# RAG_TOP_K = 4
+
+
+# RAG_CHUNK_SIZE = 180
+# RAG_CHUNK_OVERLAP = 40
+# RAG_TOP_K = 4
+
+# Chunks scoring below this cosine similarity are dropped from the
+# retrieved context entirely, rather than being handed to the model
+# just because they were the "closest available" match. Without this,
+# a question genuinely unrelated to any loaded document would still
+# retrieve *something* (Qdrant always returns its closest points), and
+# the model could end up half-answering from irrelevant text instead
+# of saying it doesn't have enough information (Week 7.6).
+RAG_MIN_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.2"))
+
+# ---------------- Vector database (Qdrant) ----------------
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "document_qa_chunks")
+# Leave QDRANT_URL unset to run Qdrant in embedded "local mode" (data
+# stored on disk under QDRANT_PATH, no Docker/server needed). Set
+# QDRANT_URL (e.g. "http://localhost:6333") to use a real Qdrant
+# server instead -- rag/vector_store.py handles either transparently.
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_PATH = os.getenv("QDRANT_PATH", "./qdrant_data")
