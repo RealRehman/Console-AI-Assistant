@@ -234,6 +234,25 @@ function createRow(text, sender) {
   return row;
 }
 
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// Minimal markdown -> HTML: bold, italic, inline code, line breaks.
+// Escapes HTML first so the LLM's output can't inject markup.
+function renderMarkdown(text) {
+  let html = escapeHtml(text);
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
+
 // Citations: each source is {source, page, section, score, label}
 function createSourcesRow(sources) {
   const row = document.createElement('div');
@@ -354,6 +373,7 @@ async function sendMessage() {
   let usedRag = false;
   let sources = [];
   let hasStartedStreaming = false;
+  let rawReply = '';
 
   try {
     const response = await fetch('/chat/stream', {
@@ -400,7 +420,8 @@ async function sendMessage() {
             bubble.classList.add('streaming');
             hasStartedStreaming = true;
           }
-          bubble.textContent += event.content;
+          rawReply += event.content;
+          bubble.innerHTML = renderMarkdown(rawReply);
           scrollToBottom();
 
         } else if (event.type === 'tool_call') {
@@ -442,7 +463,7 @@ async function sendMessage() {
       }
     }
 
-  } catch (error) {
+    } catch (error) {
     hideTyping();
 
     if (!hasStartedStreaming) {
@@ -450,14 +471,14 @@ async function sendMessage() {
       chat.appendChild(aiRow);
       observeRow(aiRow);
     } else {
-      bubble.textContent += `\n\n⚠️ ${error.message || 'Connection lost.'}`;
+      rawReply += `\n\n⚠️ ${error.message || 'Connection lost.'}`;
+      bubble.innerHTML = renderMarkdown(rawReply);
     }
 
     scrollToBottom();
     console.error(error);
   }
 }
-
 
 // ---------- Typing indicator ----------
 function showTyping() { typingRow.hidden = false; }
